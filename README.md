@@ -16,17 +16,8 @@ GA-TiDE extends TiDE (Das et al., 2023) with two modifications:
 It is implemented as a drop-in subclass of the Darts `TiDEModel`: `fit`,
 `predict`, `historical_forecasts` and `save`/`load` behave identically.
 
-> **Status:** [pre-review / under review / published]. Results in this
-> repository correspond to [commit or tag].
+> **Status:** <img src="https://shields.io" alt="Pre-Review" valign="middle">. Results in this repository correspond to [commit or tag].
 
-<!-- Pre-Review Status Badge -->
-<img src="https://shields.io" alt="Pre-Review Status">
-
-<!-- Under Review Status Badge -->
-<img src="https://shields.io" alt="Under Review Status">
-
-<!-- Published Status Badge -->
-<img src="https://shields.io" alt="Published Status">
 
 ---
 
