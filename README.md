@@ -4,10 +4,10 @@ Reference implementation and benchmark code for *[paper title]*.
 
 GA-TiDE extends TiDE (Das et al., 2023) with two modifications:
 
-1. a **gated residual block** — a sigmoid gate on the nonlinear branch of
+1. A **gated residual block** - a sigmoid gate on the nonlinear branch of
    TiDE's residual block, leaving the activation, dropout placement and linear
    skip unchanged;
-2. **Segment Attention Fusion** — the flattened input segments (target
+2. **Segment Attention Fusion** - the flattened input segments (target
    lookback, past covariates, future covariates, static attributes) are
    projected to a common width, treated as tokens, and passed through one
    multi-head self-attention layer before entering the encoder, instead of
@@ -24,11 +24,11 @@ It is implemented as a drop-in subclass of the Darts `TiDEModel`: `fit`,
 ## Installation
 
 ```bash
-git clone https://github.com/Nripendrobiswas/ga-tide.git
-cd ga-tide
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-pip install -e .
+!git clone https://github.com/Nripendrobiswas/ga-tide.git
+%%cd ga-tide
+!python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+!pip install -r requirements.txt
+!pip install -e .
 ```
 
 The `darts` version is pinned deliberately — GA-TiDE subclasses private Darts
