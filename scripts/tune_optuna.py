@@ -34,7 +34,17 @@ import warnings
 import numpy as np
 import optuna
 import torch
-from optuna.integration import PyTorchLightningPruningCallback
+# Optuna 4.x moved this into the separate `optuna-integration` package.
+try:
+    from optuna.integration import PyTorchLightningPruningCallback
+except ImportError:  # pragma: no cover
+    try:
+        from optuna_integration import PyTorchLightningPruningCallback
+    except ImportError as exc:
+        raise ImportError(
+            "PyTorchLightningPruningCallback not found. On Optuna 4.x install "
+            "the integration package: pip install optuna-integration[pytorch_lightning]"
+        ) from exc
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from sklearn.preprocessing import StandardScaler
 

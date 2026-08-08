@@ -241,7 +241,7 @@ def run_layout(lookback: int, horizon: int, hidden: int) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 def synthetic_batch(net, batch_size: int = 64, seed: int = 0):
     """One PLModuleInput batch built directly from the network's own dims."""
-    g = torch.generator = torch.Generator().manual_seed(seed)
+    g = torch.Generator().manual_seed(seed)
     dt = next(net.parameters()).dtype
     d_y, d_p, d_f = net.output_dim, net.past_cov_dim, net.future_cov_dim
     Lc, Hc = net.input_chunk_length, net.output_chunk_length
