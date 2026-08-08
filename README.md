@@ -16,7 +16,7 @@ GA-TiDE extends TiDE (Das et al., 2023) with two modifications:
 It is implemented as a drop-in subclass of the Darts `TiDEModel`: `fit`,
 `predict`, `historical_forecasts` and `save`/`load` behave identically.
 
-**Status:** [<font color="orange">**pre-review**</font> / <font color="dodgerblue">**under review**</font> / <font color="green">**published**</font>]. Results in this > repository correspond to [commit or tag].
+**Status:** [<font color="orange"><kbd>**pre-review**</kbd></font> / <font color="dodgerblue">**under review**</font> / <font color="green">**published**</font>]. Results in this > repository correspond to [commit or tag].
 
 ---
 
