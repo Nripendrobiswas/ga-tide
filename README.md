@@ -19,6 +19,15 @@ It is implemented as a drop-in subclass of the Darts `TiDEModel`: `fit`,
 > **Status:** [pre-review / under review / published]. Results in this
 > repository correspond to [commit or tag].
 
+<!-- Pre-Review Status Badge -->
+<img src="https://shields.io" alt="Pre-Review Status">
+
+<!-- Under Review Status Badge -->
+<img src="https://shields.io" alt="Under Review Status">
+
+<!-- Published Status Badge -->
+<img src="https://shields.io" alt="Published Status">
+
 ---
 
 ## Installation
