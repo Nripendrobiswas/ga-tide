@@ -24,7 +24,7 @@ It is implemented as a drop-in subclass of the Darts `TiDEModel`: `fit`,
 
 ```bash
 !git clone https://github.com/Nripendrobiswas/ga-tide.git
-%%cd ga-tide
+%cd ga-tide
 !python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 !pip install -r requirements.txt
 !pip install -e .
