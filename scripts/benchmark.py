@@ -2,10 +2,10 @@
 Long-term forecasting benchmark for TiDE / GA-TiDE
 ==================================================
 
-Evaluates the ablation grid of `ga_tide.py` on the standard long-term
-forecasting datasets (ETTh1, ETTh2, ETTm1, ETTm2, Weather, Electricity)
-under the protocol used by Informer / Autoformer / DLinear / PatchTST /
-TiDE, so that the resulting numbers are comparable to published tables.
+Compares Darts' `TiDEModel` against `GATiDEModel` on the standard long-term
+forecasting datasets (ETTh1, ETTh2, ETTm1, ETTm2, Weather, Electricity) under
+the protocol used by Informer / Autoformer / DLinear / PatchTST / TiDE, so
+that the resulting numbers are comparable to published tables.
 
 Four protocol choices are made explicit because getting any of them wrong
 silently produces numbers that cannot be compared to the literature:
@@ -37,7 +37,16 @@ silently produces numbers that cannot be compared to the literature:
    Note that Darts' `Scaler()` defaults to MinMaxScaler, not
    StandardScaler; the default would silently change the metric scale.
 
-4. DATA SOURCE. Darts' bundled loaders are not always the same series as
+4. DATA REPAIR. The LTSF CSVs are not always on a regular time grid. The
+   Weather file carries one duplicated timestamp and one 100-minute gap in an
+   otherwise 10-minute series. Darts regularises the index by inserting NaN
+   rows, and a single NaN inside a training window yields a NaN loss and a
+   model destroyed on the first optimiser step -- surfacing downstream as NaN
+   metrics rather than as an error. `load_series` therefore drops duplicate
+   timestamps and interpolates absent ones, reporting both on stdout. This is
+   preprocessing and belongs in the paper's experimental setup.
+
+5. DATA SOURCE. Darts' bundled loaders are not always the same series as
    the LTSF benchmark CSVs. In particular Darts' `ElectricityDataset` is
    the 370-client LD2011_2014 set, whereas the benchmark "Electricity"
    (ECL) is a 321-client preprocessed variant; the two are not comparable.
@@ -82,6 +91,7 @@ from sklearn.preprocessing import StandardScaler
 from darts import TimeSeries
 from darts.dataprocessing.transformers import Scaler
 from darts.metrics import mae, mse
+from darts.utils.missing_values import fill_missing_values
 from darts.models import TiDEModel
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
@@ -147,11 +157,49 @@ def load_series(name: str, source: str, csv_dir: Optional[str]) -> TimeSeries:
         path = os.path.join(csv_dir, spec.csv_name)
         df = pd.read_csv(path)
         df[spec.date_col] = pd.to_datetime(df[spec.date_col])
+
+        # The LTSF benchmark CSVs are not always on a perfectly regular grid.
+        # The Weather file, for instance, contains one duplicated timestamp and
+        # one 100-minute gap in an otherwise 10-minute series. Both must be
+        # handled BEFORE the series reaches the model:
+        #
+        #   * a duplicated timestamp prevents Darts from inferring a frequency;
+        #   * `fill_missing_dates=True` regularises the index by inserting NaN
+        #     rows, and a single NaN inside a training window produces a NaN
+        #     loss, NaN gradients, and a model destroyed on the first optimiser
+        #     step -- which surfaces downstream as NaN metrics rather than as
+        #     an error.
+        #
+        # Both repairs are reported on stdout so that any preprocessing applied
+        # to a dataset is visible in the run log and can be stated in writing.
+        n_dupes = int(df[spec.date_col].duplicated().sum())
+        if n_dupes:
+            df = df.drop_duplicates(subset=spec.date_col, keep="first")
+            print(f"[data] {spec.csv_name}: dropped {n_dupes} duplicated "
+                  f"timestamp(s), keeping the first occurrence.")
+
+        df = df.sort_values(spec.date_col)
         value_cols = [c for c in df.columns if c != spec.date_col]
-        return TimeSeries.from_dataframe(
+        series = TimeSeries.from_dataframe(
             df, time_col=spec.date_col, value_cols=value_cols,
             fill_missing_dates=True, freq=None,
         ).astype(np.float32)
+
+        n_missing = int(np.isnan(series.values()).sum())
+        if n_missing:
+            n_rows = int(np.isnan(series.values()).any(axis=1).sum())
+            series = fill_missing_values(series, fill="auto")
+            remaining = int(np.isnan(series.values()).sum())
+            print(f"[data] {spec.csv_name}: {n_rows} timestamp(s) were absent "
+                  f"from the grid ({n_missing} values); filled by linear "
+                  f"interpolation.")
+            if remaining:
+                raise ValueError(
+                    f"{spec.csv_name}: {remaining} values are still NaN after "
+                    "interpolation (missing values at a series boundary cannot "
+                    "be interpolated). Inspect the file before proceeding."
+                )
+        return series
 
     # Darts bundled loader
     import darts.datasets as dd
@@ -302,6 +350,59 @@ def build_model(
     )
 
 
+# Keys in an Optuna `*_best.json` that map onto build_model() arguments.
+TUNABLE = (
+    "num_encoder_layers", "num_decoder_layers", "decoder_output_dim",
+    "temporal_decoder_hidden", "temporal_width_past", "temporal_width_future",
+    "dropout", "use_layer_norm", "lr", "batch_size", "num_attn_heads",
+)
+
+
+def load_config(path: str, expect_model: str) -> dict:
+    """Read a tuned configuration written by tune_optuna.py.
+
+    Transcribing a dozen hyperparameters by hand across every dataset and
+    horizon is the kind of error that is invisible until someone tries to
+    reproduce the table, so the search output is consumed directly.
+
+    `hidden_size` is not sampled directly: the search samples
+    `num_attn_heads` and `hidden_size_mult` and takes their product, so that
+    every point satisfies `hidden_size % num_attn_heads == 0`. The realised
+    value is recorded under `user_attrs`; it is recomputed here as a
+    cross-check.
+    """
+    with open(path) as fh:
+        blob = json.load(fh)
+
+    if blob.get("model") and blob["model"] != expect_model:
+        raise ValueError(
+            f"{path} is a configuration for '{blob['model']}' but was passed "
+            f"for '{expect_model}'. Using the wrong model's hyperparameters "
+            "would silently invalidate the comparison."
+        )
+
+    best = blob.get("best_params", {})
+    cfg = {k: best[k] for k in TUNABLE if k in best}
+
+    heads = best.get("num_attn_heads")
+    mult = best.get("hidden_size_mult")
+    if heads is not None and mult is not None:
+        cfg["hidden_size"] = heads * mult
+    recorded = blob.get("user_attrs", {}).get("hidden_size")
+    if recorded is not None:
+        if "hidden_size" in cfg and cfg["hidden_size"] != recorded:
+            raise ValueError(
+                f"{path}: hidden_size mismatch -- num_attn_heads * "
+                f"hidden_size_mult = {cfg['hidden_size']} but user_attrs "
+                f"records {recorded}."
+            )
+        cfg["hidden_size"] = recorded
+
+    if "hidden_size" not in cfg:
+        raise ValueError(f"{path}: could not determine hidden_size.")
+    return cfg
+
+
 def count_parameters(model) -> int:
     """Trainable parameter count. Only valid after `fit()`, since Darts
     instantiates the network lazily from the first training sample."""
@@ -392,12 +493,10 @@ def run_one(args, dataset: str, horizon: int, model_name: str, seed: int) -> dic
     subhourly = dataset.startswith("ETTm")
     encoders = build_encoders(freq_is_subhourly=subhourly)
 
-    model = build_model(
-        model_name=model_name,
-        lookback=args.lookback,
-        horizon=horizon,
-        seed=seed,
-        encoders=encoders,
+    # Defaults from the command line, then the tuned configuration for THIS
+    # model on top. Each model keeps its own architecture, which is the point
+    # of tuning per model; report parameter counts alongside the metrics.
+    arch = dict(
         hidden_size=args.hidden_size,
         num_encoder_layers=args.num_encoder_layers,
         num_decoder_layers=args.num_decoder_layers,
@@ -409,11 +508,23 @@ def run_one(args, dataset: str, horizon: int, model_name: str, seed: int) -> dic
         use_layer_norm=args.use_layer_norm,
         lr=args.lr,
         batch_size=args.batch_size,
+        num_attn_heads=args.num_attn_heads,
+    )
+    cfg_path = getattr(args, "configs", {}).get(model_name)
+    if cfg_path:
+        arch.update(load_config(cfg_path, model_name))
+
+    model = build_model(
+        model_name=model_name,
+        lookback=args.lookback,
+        horizon=horizon,
+        seed=seed,
+        encoders=encoders,
         n_epochs=args.n_epochs,
         patience=args.patience,
-        num_attn_heads=args.num_attn_heads,
         use_rin=args.use_rin,
         accelerator=args.accelerator,
+        **arch,
     )
 
     t0 = time.time()
@@ -437,8 +548,16 @@ def run_one(args, dataset: str, horizon: int, model_name: str, seed: int) -> dic
         "fit_seconds": round(fit_seconds, 1),
         "sec_per_epoch": round(fit_seconds / max(epochs_run, 1), 2),
         "lookback": args.lookback,
-        "hidden_size": args.hidden_size,
-        "use_layer_norm": args.use_layer_norm,
+        "hidden_size": arch["hidden_size"],
+        "use_layer_norm": arch["use_layer_norm"],
+        "dropout": arch["dropout"],
+        "lr": arch["lr"],
+        "batch_size": arch["batch_size"],
+        "num_attn_heads": arch["num_attn_heads"] if model_name == "ga-tide" else None,
+        "num_encoder_layers": arch["num_encoder_layers"],
+        "num_decoder_layers": arch["num_decoder_layers"],
+        "decoder_output_dim": arch["decoder_output_dim"],
+        "config_source": os.path.basename(cfg_path) if cfg_path else "cli-defaults",
         "channel_independent": args.channel_independent,
         "split_convention": args.split_convention,
         "stride": args.stride,
@@ -454,6 +573,25 @@ DEFAULT_OUT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "results", "results.csv",
 )
+
+
+def already_done(key: dict, path: str) -> bool:
+    """True if a row with this (dataset, horizon, model, seed) is already on
+    disk. Used by --skip-existing so an interrupted sweep can be resumed
+    without repeating completed runs -- essential on Colab/Kaggle, where
+    sessions disconnect long before a full grid finishes."""
+    if not os.path.exists(path):
+        return False
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return False
+    if df.empty or not all(c in df.columns for c in KEY_COLS):
+        return False
+    mask = np.ones(len(df), dtype=bool)
+    for c in KEY_COLS:
+        mask &= df[c].astype(str) == str(key[c])
+    return bool(mask.any())
 
 
 def append_result(row: dict, path: str) -> None:
@@ -513,6 +651,10 @@ def main() -> None:
     p.add_argument("--use-layer-norm", action="store_true", default=True)
     p.add_argument("--no-layer-norm", dest="use_layer_norm", action="store_false")
     p.add_argument("--num-attn-heads", type=int, default=4)
+    p.add_argument("--config-tide", default=None,
+                   help="path to a tune_optuna.py *_best.json for the TiDE arm")
+    p.add_argument("--config-ga-tide", default=None,
+                   help="path to a tune_optuna.py *_best.json for the GA-TiDE arm")
     p.add_argument("--use-rin", action="store_true", default=True)
 
     # training
@@ -523,7 +665,21 @@ def main() -> None:
     p.add_argument("--accelerator", default="auto")
 
     p.add_argument("--out", default=DEFAULT_OUT)
+    p.add_argument("--skip-existing", action="store_true",
+                   help="skip (dataset, horizon, model, seed) combinations "
+                        "already present in --out; use to resume an "
+                        "interrupted sweep")
     args = p.parse_args()
+
+    args.configs = {}
+    if args.config_tide:
+        args.configs["tide"] = args.config_tide
+    if args.config_ga_tide:
+        args.configs["ga-tide"] = args.config_ga_tide
+    for m, path in args.configs.items():
+        if not os.path.exists(path):
+            p.error(f"--config for '{m}': no such file: {path}")
+        print(f"{m:>8}: {load_config(path, m)}")
 
     datasets = list(DATASETS) if args.dataset == "all" else [args.dataset]
     horizons = list(HORIZONS) if args.all_horizons else [args.horizon]
@@ -546,6 +702,11 @@ def main() -> None:
                 for seed in seeds:
                     i += 1
                     tag = f"[{i}/{total}] {ds} H={h} model={model_name} seed={seed}"
+                    key = {"dataset": ds, "horizon": h,
+                           "model": model_name, "seed": seed}
+                    if args.skip_existing and already_done(key, args.out):
+                        print(tag + "  -- already done, skipped", flush=True)
+                        continue
                     print(tag, flush=True)
                     try:
                         row = run_one(args, ds, h, model_name, seed)
