@@ -98,8 +98,10 @@ def objective(trial: optuna.Trial, args, data) -> float:
     if cls is GATiDEModel:
         params["num_attn_heads"] = num_attn_heads
 
-    lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
-    batch_size = trial.suggest_categorical("batch_size", [128, 256, 512])
+    # lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
+    # batch_size = trial.suggest_categorical("batch_size", [128, 256, 512])
+    lr=1e-4
+    batch_size=32
 
     callbacks = [
         EarlyStopping(monitor="val_loss", patience=args.patience,
